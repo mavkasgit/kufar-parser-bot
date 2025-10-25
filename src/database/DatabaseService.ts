@@ -78,6 +78,14 @@ export class DatabaseService {
     return parseInt(result.rows[0].count, 10);
   }
 
+  async getLink(linkId: number): Promise<Link | null> {
+    const result = await this.pool.query<Link>(
+      'SELECT * FROM links WHERE id = $1',
+      [linkId]
+    );
+    return result.rows[0] || null;
+  }
+
   async deleteLink(linkId: number): Promise<void> {
     await this.pool.query('DELETE FROM links WHERE id = $1', [linkId]);
   }

@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import { DatabaseService } from './database/DatabaseService';
 import { BotHandler } from './bot/BotHandler';
-import { ParserScheduler } from './scheduler/ParserScheduler';
+// import { ParserScheduler } from './scheduler/ParserScheduler'; // ОТКЛЮЧЕНО
 import { logger } from './utils/logger';
 
 dotenv.config();
@@ -31,14 +31,15 @@ async function main() {
   const bot = new BotHandler(TELEGRAM_BOT_TOKEN!, db);
   logger.info('Bot initialized');
 
-  // Initialize scheduler
-  const scheduler = new ParserScheduler(db, bot);
-  scheduler.start();
+  // Initialize scheduler (ОТКЛЮЧЕНО - будем допиливать позже)
+  // const scheduler = new ParserScheduler(db, bot);
+  // scheduler.start();
+  logger.info('Auto-update scheduler is DISABLED');
 
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down...');
-    scheduler.stop();
+    // scheduler.stop(); // ОТКЛЮЧЕНО
     bot.stop();
     await db.close();
     process.exit(0);

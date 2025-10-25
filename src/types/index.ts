@@ -35,6 +35,9 @@ export interface AdData {
   price?: string;
   image_url?: string;
   ad_url: string;
+  location?: string; // Город/область
+  address?: string;  // Адрес
+  published_at?: Date; // Время публикации
 }
 
-export type Platform = 'kufar' | 'onliner' | 'realt';
+export type Platform = 'kufar' | 'onliner';
