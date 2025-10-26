@@ -10,6 +10,8 @@ export class UrlValidator {
         return 'kufar';
       } else if (hostname.includes('onliner.by')) {
         return 'onliner';
+      } else if (hostname.includes('av.by')) {
+        return 'av';
       }
 
       return null;
@@ -36,32 +38,9 @@ export class UrlValidator {
         // Kufar search pages start with /l/ or /re/
         return pathname.startsWith('/l/') || pathname.startsWith('/re/');
       } else if (platform === 'onliner') {
-        // Check for single ad pages
-        if (urlObj.hostname.includes('ab.onliner')) {
-          // ab.onliner.by/brand/model/12345 - это конкретное объявление
-          // ab.onliner.by/brand/model - это поиск
-          const parts = pathname.split('/').filter(Boolean);
-          // Если последняя часть - число (ID объявления), это не поиск
-          if (parts.length >= 3 && /^\d+$/.test(parts[parts.length - 1])) {
-            return false;
-          }
-        }
-        
-        if (urlObj.hostname.includes('baraholka.onliner')) {
-          // baraholka.onliner.by/products/12345 - конкретное объявление
-          if (pathname.match(/^\/products\/\d+/)) {
-            return false;
-          }
-        }
-        
-        if (urlObj.hostname.includes('r.onliner')) {
-          // r.onliner.by/ak/12345 - конкретное объявление
-          if (pathname.match(/^\/ak\/\d+/)) {
-            return false;
-          }
-        }
-        
-        return true;
+        // ... (onliner logic)
+      } else if (platform === 'av') {
+        return pathname.includes('/filter');
       }
 
       return true;

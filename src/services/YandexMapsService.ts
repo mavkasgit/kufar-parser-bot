@@ -151,71 +151,37 @@ export class YandexMapsService {
     }
 
     const { lat, lon, kind, envelope } = geocodeResult;
-    
-    // Для точных адресов (дом, улица) - ставим метку
+
+    // Для точных адресов (дом, улица) - ставим метку с большим зумом
     if (kind === 'house' || kind === 'street') {
       const params = new URLSearchParams({
         ll: `${lon},${lat}`,
-        z: '12',
+        z: '11', // Более крупный зум для улиц/домов
         l: 'map',
         pt: `${lon},${lat},pm2rdm`,
         size: '600,400',
       });
       return `${this.staticApiUrl}?${params.toString()}`;
     }
-    
-    // Для районов и городов - пытаемся получить реальные границы
-    if ((kind === 'district' || kind === 'locality') && geocodeResult.bounds) {
-      let polygon: string;
-      
-      // Сначала проверяем районы Минска
-      const minskDistrict = findMinskDistrict(address);
-      if (minskDistrict) {
-        polygon = minskDistrict.coordinates.map(([lon, lat]) => `${lon},${lat}`).join(',');
+
+    // Для районов Минска - рисуем полигон
+    const minskDistrict = findMinskDistrict(address);
+    if (minskDistrict && geocodeResult.bounds) {
+        const polygon = minskDistrict.coordinates.map(([lon, lat]) => `${lon},${lat}`).join(',');
         logger.info('Using Minsk district boundaries', { address, district: minskDistrict.name });
-      } else {
-        // Пробуем получить границы из OpenStreetMap
-        const osmPolygon = await this.getPolygonFromOSM(address);
-        
-        if (osmPolygon && osmPolygon.length > 0) {
-          // Используем реальные границы из OSM
-          polygon = osmPolygon.map(([lon, lat]) => `${lon},${lat}`).join(',');
-          logger.info('Using real boundaries from OSM', { address, pointsCount: osmPolygon.length });
-        } else {
-        // Fallback: рисуем круг
-        const { lowerCorner, upperCorner } = geocodeResult.bounds;
-        const centerLon = (lowerCorner[0] + upperCorner[0]) / 2;
-        const centerLat = (lowerCorner[1] + upperCorner[1]) / 2;
-        const radiusLon = (upperCorner[0] - lowerCorner[0]) / 2;
-        const radiusLat = (upperCorner[1] - lowerCorner[1]) / 2;
-        const radius = Math.min(radiusLon, radiusLat) * 0.8;
-        
-        const circlePoints: string[] = [];
-        const numPoints = 36;
-        for (let i = 0; i <= numPoints; i++) {
-          const angle = (i * 2 * Math.PI) / numPoints;
-          const pointLon = centerLon + radius * Math.cos(angle);
-          const pointLat = centerLat + radius * Math.sin(angle);
-          circlePoints.push(`${pointLon},${pointLat}`);
-        }
-          polygon = circlePoints.join(',');
-          logger.info('Using circle fallback', { address });
-        }
-      }
-      
-      // Формат: pl=c:FF0000CC,f:FF000033,w:3,lon1,lat1,lon2,lat2,...
-      const polygonStyle = `c:FF0000CC,f:FF000033,w:3,${polygon}`;
-      
-      const params = new URLSearchParams();
-      if (envelope) params.append('bbox', envelope);
-      params.append('l', 'map');
-      params.append('pl', polygonStyle);
-      params.append('size', '600,400');
-      
-      return `${this.staticApiUrl}?${params.toString()}`;
+
+        const polygonStyle = `c:FF0000CC,f:FF000033,w:3,${polygon}`;
+
+        const params = new URLSearchParams();
+        if (envelope) params.append('bbox', envelope);
+        params.append('l', 'map');
+        params.append('pl', polygonStyle);
+        params.append('size', '600,400');
+
+        return `${this.staticApiUrl}?${params.toString()}`;
     }
-    
-    // Для остальных случаев - метка с зумом
+
+    // Для всех остальных случаев (включая города/locality) - ставим метку с подходящим зумом
     const zoom = kind === 'locality' ? '11' : kind === 'district' ? '13' : '12';
     const params = new URLSearchParams({
       ll: `${lon},${lat}`,

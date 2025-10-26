@@ -139,7 +139,8 @@ export class OnlinerParser extends BaseParser {
         const title = titleParts.length > 0 ? titleParts.join(', ') : 'Квартира';
         
         const price = apt.price?.amount ? `${apt.price.amount} ${apt.price.currency}` : '';
-        const adUrl = `https://r.onliner.by/ak/${apt.id}`;
+        // URL может быть в apt.url или формируется из apt.id
+        const adUrl = apt.url || `https://r.onliner.by/ak/apartments/${apt.id}`;
         const imageUrl = apt.photo?.url;
         
         // Извлекаем город и адрес

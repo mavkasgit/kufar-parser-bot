@@ -128,10 +128,15 @@ export class ParserScheduler {
           telegramId: user.telegram_id 
         });
         
-        // Берем последние 5 объявлений (самые новые)
-        const lastFive = newAds.slice(-5);
-        // Разворачиваем массив чтобы отправлять от старого к новому (самое новое будет последним)
-        const adsToNotify = lastFive.reverse();
+        // Сортируем объявления по дате публикации (от старых к новым)
+        const sortedAds = newAds.sort((a, b) => {
+          const dateA = a.published_at ? new Date(a.published_at).getTime() : 0;
+          const dateB = b.published_at ? new Date(b.published_at).getTime() : 0;
+          return dateA - dateB;
+        });
+        
+        // Берем последние 5 объявлений (самые новые по дате публикации)
+        const adsToNotify = sortedAds.slice(-5);
         
         for (const ad of adsToNotify) {
           try {

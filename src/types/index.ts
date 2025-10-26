@@ -9,7 +9,7 @@ export interface Link {
   id: number;
   user_id: number;
   url: string;
-  platform: 'kufar' | 'onliner' | 'realt';
+  platform: Platform;
   is_active: boolean;
   error_count: number;
   last_parsed_at: Date | null;
@@ -41,4 +41,4 @@ export interface AdData {
   published_at?: Date; // Время публикации
 }
 
-export type Platform = 'kufar' | 'onliner';
+export type Platform = 'kufar' | 'onliner' | 'av';

@@ -125,7 +125,7 @@ export class BotHandler {
 
       await this.bot.sendMessage(
         chatId,
-        '👋 Привет! Я помогу отслеживать новые объявления на Kufar и Onliner.\n\n' +
+        '👋 Привет! Я помогу отслеживать новые объявления на Kufar, Onliner и av.by.\n\n' +
         'Используйте кнопки снизу для управления ссылками.',
         { reply_markup: this.getMainKeyboard() }
       );
@@ -157,7 +157,8 @@ export class BotHandler {
         chatId,
         '📎 Отправьте ссылку на страницу поиска с фильтрами:\n\n' +
         '• Kufar.by - страница категории с фильтрами\n' +
-        '• Onliner.by - Барахолка, Авто (страница поиска), Недвижимость (карта)\n\n' +
+        '• Onliner.by - Барахолка, Авто (страница поиска), Недвижимость (карта)\n' +
+        '• av.by - страница поиска с фильтрами\n\n' +
         '⚠️ Не отправляйте ссылки на конкретные объявления!',
         { reply_markup: this.getMainKeyboard() }
       );
@@ -256,6 +257,7 @@ export class BotHandler {
       const platformEmoji: Record<Platform, string> = {
         kufar: '🟢',
         onliner: '🔵',
+        av: '🚗',
       };
 
       const keyboard = {
@@ -314,7 +316,7 @@ export class BotHandler {
       // Проверяем валидность ссылки
       const validation = UrlValidator.validateUrl(url);
       if (!validation.valid || !validation.platform) {
-        await this.bot.sendMessage(chatId, '❌ Эта ссылка не поддерживается. Используйте ссылки на Kufar или Onliner.');
+        await this.bot.sendMessage(chatId, '❌ Эта ссылка не поддерживается. Используйте ссылки на Kufar, Onliner или av.by.');
         return;
       }
 
@@ -361,6 +363,7 @@ export class BotHandler {
       const platformEmoji: Record<Platform, string> = {
         kufar: '🟢',
         onliner: '🔵',
+        av: '🚗',
       };
 
       await this.bot.sendMessage(
@@ -491,6 +494,7 @@ export class BotHandler {
       const platformEmoji: Record<Platform, string> = {
         kufar: '🟢',
         onliner: '🔵',
+        av: '🚗',
       };
 
       for (const link of links) {
@@ -699,8 +703,8 @@ export class BotHandler {
       });
     }
 
-    // Добавляем карту если есть адрес
-    if ((ad.location || ad.address) && this.yandexMaps) {
+    // Добавляем карту только если есть точный адрес
+    if (ad.address && this.yandexMaps) {
       try {
         const addressParts = [];
         if (ad.location) addressParts.push(ad.location);
@@ -783,8 +787,8 @@ export class BotHandler {
         });
       }
 
-      // Добавляем карту если есть адрес
-      if ((addressParts.length > 0) && this.yandexMaps) {
+      // Добавляем карту только если есть точный адрес
+      if ((ad as any).address && this.yandexMaps) {
         try {
           const fullAddress = addressParts.join(', ');
           const mapUrl = await this.yandexMaps.getMapForAddress(fullAddress);

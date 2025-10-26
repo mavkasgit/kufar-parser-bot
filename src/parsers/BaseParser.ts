@@ -12,16 +12,20 @@ export abstract class BaseParser implements IParser {
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   ];
 
-  constructor() {
-    this.axiosInstance = axios.create({
-      timeout: 10000,
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-      },
-    });
+  constructor(axiosInstance?: AxiosInstance) {
+    if (axiosInstance) {
+      this.axiosInstance = axiosInstance;
+    } else {
+      this.axiosInstance = axios.create({
+        timeout: 10000,
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
   }
 
   protected getRandomUserAgent(): string {
