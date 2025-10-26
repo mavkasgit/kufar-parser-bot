@@ -14,12 +14,13 @@ export class BotHandler {
   private userStates: Map<number, string> = new Map();
   private yandexMaps: YandexMapsService | null = null;
   private adCache: Map<string, AdData> = new Map(); // Кэш объявлений для показа на карте
+  private pendingLinks: Map<number, string> = new Map(); // userId -> URL для подтверждения
 
   constructor(token: string, db: DatabaseService) {
     this.bot = new TelegramBot(token, { polling: true });
     this.db = db;
     this.rateLimiter = new RateLimiter(10, 60000);
-    
+
     // Инициализируем Yandex Maps если есть API ключ
     const yandexApiKey = process.env.YANDEX_MAPS_API_KEY;
     if (yandexApiKey) {
@@ -28,7 +29,7 @@ export class BotHandler {
     } else {
       logger.warn('YANDEX_MAPS_API_KEY not set, map features disabled');
     }
-    
+
     this.setupHandlers();
   }
 
@@ -65,6 +66,9 @@ export class BotHandler {
         await this.handleDeleteAllLinks(chatId, userId);
       } else if (this.userStates.get(userId) === 'awaiting_url') {
         await this.handleAddLink(chatId, userId, msg.text);
+      } else if (msg.text && (msg.text.startsWith('http://') || msg.text.startsWith('https://'))) {
+        // Пользователь отправил ссылку напрямую - показываем превью
+        await this.handleDirectLink(chatId, userId, msg.text);
       }
     });
 
@@ -101,6 +105,10 @@ export class BotHandler {
       } else if (data?.startsWith('map_')) {
         const adId = data.replace('map_', '');
         await this.handleShowMap(chatId, adId);
+      } else if (data === 'confirm_add_link') {
+        await this.handleConfirmAddLink(chatId, userId);
+      } else if (data === 'cancel_add_link') {
+        await this.handleCancelAddLink(chatId, userId);
       }
     });
 
@@ -214,14 +222,14 @@ export class BotHandler {
 
       // Test parsing before adding link
       await this.bot.sendMessage(chatId, '⏳ Проверяю ссылку...');
-      
+
       let testAds: AdData[] = [];
       try {
         testAds = await parser.parseUrl(url);
-        
+
         if (testAds.length === 0) {
           await this.bot.sendMessage(
-            chatId, 
+            chatId,
             '❌ По этой ссылке не найдено объявлений.\n\n' +
             'Возможные причины:\n' +
             '• Неправильные фильтры\n' +
@@ -266,18 +274,199 @@ export class BotHandler {
         { reply_markup: keyboard }
       );
 
-      // Show last 5 ads as preview
-      const previewAds = testAds.slice(0, 5);
+      // Show last 5 ads as preview (from oldest to newest)
+      const previewAds = testAds.slice(-5).reverse();
       await this.bot.sendMessage(chatId, `📋 Последние ${previewAds.length} объявлений:`);
-      
+
       for (const ad of previewAds) {
         await this.sendAdWithMap(chatId, ad);
       }
 
       logger.info('Link added', { userId, platform: validation.platform, url, adsFound: testAds.length });
     } catch (error: any) {
-      logger.error('Failed to add link', { userId, url, error: error.message });
+      logger.error('Failed to add link', { userId, url, error: error.message, stack: error.stack });
+
+      // Определяем тип ошибки и показываем понятное сообщение
+      let errorMessage = '❌ Не удалось добавить ссылку.';
+
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение или попробуйте позже.';
+      } else if (error.response?.status === 403) {
+        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
+      } else if (error.response?.status === 404) {
+        errorMessage = '❌ Страница не найдена. Проверьте правильность ссылки.';
+      } else if (error.response?.status === 429) {
+        errorMessage = '❌ Слишком много запросов к сайту. Подождите немного и попробуйте снова.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
+      } else if (error.message?.includes('timeout')) {
+        errorMessage = '❌ Превышено время ожидания ответа от сайта. Попробуйте позже.';
+      } else if (error.message?.includes('parse') || error.message?.includes('JSON')) {
+        errorMessage = '❌ Ошибка обработки данных с сайта. Возможно, сайт изменил формат страницы.';
+      }
+
+      await this.bot.sendMessage(chatId, errorMessage);
+    }
+  }
+
+  async handleDirectLink(chatId: number, userId: number, url: string): Promise<void> {
+    try {
+      // Проверяем валидность ссылки
+      const validation = UrlValidator.validateUrl(url);
+      if (!validation.valid || !validation.platform) {
+        await this.bot.sendMessage(chatId, '❌ Эта ссылка не поддерживается. Используйте ссылки на Kufar или Onliner.');
+        return;
+      }
+
+      const parser = ParserFactory.getParser(validation.platform);
+      if (!parser || !parser.validateUrl(url)) {
+        await this.bot.sendMessage(chatId, '❌ Ссылка не соответствует формату площадки.');
+        return;
+      }
+
+      const user = await this.db.getUser(userId);
+      if (!user) {
+        await this.bot.sendMessage(chatId, '❌ Пользователь не найден. Отправьте /start');
+        return;
+      }
+
+      // Проверяем лимит
+      const linksCount = await this.db.getUserLinksCount(user.id);
+      if (linksCount >= 10) {
+        await this.bot.sendMessage(chatId, '⚠️ Достигнут лимит в 10 ссылок. Удалите старые ссылки.');
+        return;
+      }
+
+      // Проверяем дубликаты
+      const existingLinks = await this.db.getUserLinks(user.id);
+      const isDuplicate = existingLinks.some(link => link.url === url);
+      if (isDuplicate) {
+        await this.bot.sendMessage(chatId, '⚠️ Эта ссылка уже добавлена в ваш список!');
+        return;
+      }
+
+      await this.bot.sendMessage(chatId, '⏳ Проверяю ссылку...');
+
+      // Парсим ссылку
+      const testAds = await parser.parseUrl(url);
+
+      if (testAds.length === 0) {
+        await this.bot.sendMessage(chatId, '❌ По этой ссылке не найдено объявлений.');
+        return;
+      }
+
+      // Сохраняем ссылку для подтверждения
+      this.pendingLinks.set(userId, url);
+
+      const platformEmoji: Record<Platform, string> = {
+        kufar: '🟢',
+        onliner: '🔵',
+      };
+
+      await this.bot.sendMessage(
+        chatId,
+        `${platformEmoji[validation.platform]} ${validation.platform.toUpperCase()}\n${url}\n\n` +
+        `Найдено объявлений: ${testAds.length}`
+      );
+
+      // Показываем превью (от старого к новому)
+      const previewAds = testAds.slice(-5).reverse();
+      await this.bot.sendMessage(chatId, `📋 Последние ${previewAds.length} объявлений:`);
+
+      for (const ad of previewAds) {
+        await this.sendAdWithMap(chatId, ad);
+      }
+
+      // Кнопки подтверждения
+      const confirmKeyboard = {
+        inline_keyboard: [
+          [
+            { text: '✅ Добавить эту ссылку', callback_data: 'confirm_add_link' },
+            { text: '❌ Отмена', callback_data: 'cancel_add_link' }
+          ]
+        ],
+      };
+
+      await this.bot.sendMessage(
+        chatId,
+        '❓ Хотите добавить эту ссылку для отслеживания новых объявлений?',
+        { reply_markup: confirmKeyboard }
+      );
+
+      logger.info('Direct link preview shown', { userId, platform: validation.platform, url, adsFound: testAds.length });
+    } catch (error: any) {
+      logger.error('Failed to handle direct link', { userId, url, error: error.message, stack: error.stack });
+
+      let errorMessage = '❌ Не удалось проверить ссылку.';
+
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение.';
+      } else if (error.response?.status === 403) {
+        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
+      } else if (error.response?.status === 404) {
+        errorMessage = '❌ Страница не найдена. Проверьте правильность ссылки.';
+      } else if (error.response?.status === 429) {
+        errorMessage = '❌ Слишком много запросов. Подождите немного.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
+      } else if (error.message?.includes('timeout')) {
+        errorMessage = '❌ Превышено время ожидания. Попробуйте позже.';
+      }
+
+      await this.bot.sendMessage(chatId, errorMessage);
+    }
+  }
+
+  async handleConfirmAddLink(chatId: number, userId: number): Promise<void> {
+    try {
+      const url = this.pendingLinks.get(userId);
+      if (!url) {
+        await this.bot.sendMessage(chatId, '❌ Ссылка не найдена. Попробуйте отправить её снова.');
+        return;
+      }
+
+      const validation = UrlValidator.validateUrl(url);
+      if (!validation.valid || !validation.platform) {
+        await this.bot.sendMessage(chatId, '❌ Ошибка валидации ссылки.');
+        this.pendingLinks.delete(userId);
+        return;
+      }
+
+      const user = await this.db.getUser(userId);
+      if (!user) {
+        await this.bot.sendMessage(chatId, '❌ Пользователь не найден.');
+        this.pendingLinks.delete(userId);
+        return;
+      }
+
+      // Добавляем ссылку
+      await this.db.createLink(user.id, url, validation.platform);
+      this.pendingLinks.delete(userId);
+
+      await this.bot.sendMessage(
+        chatId,
+        '✅ Ссылка добавлена! Вы будете получать уведомления о новых объявлениях.',
+        { reply_markup: this.getMainKeyboard() }
+      );
+
+      logger.info('Link confirmed and added', { userId, platform: validation.platform, url });
+    } catch (error: any) {
+      logger.error('Failed to confirm add link', { userId, error: error.message });
       await this.bot.sendMessage(chatId, '❌ Не удалось добавить ссылку.');
+      this.pendingLinks.delete(userId);
+    }
+  }
+
+  async handleCancelAddLink(chatId: number, userId: number): Promise<void> {
+    try {
+      this.pendingLinks.delete(userId);
+      await this.bot.sendMessage(
+        chatId,
+        '❌ Добавление ссылки отменено.',
+        { reply_markup: this.getMainKeyboard() }
+      );
+    } catch (error: any) {
+      logger.error('Failed to cancel add link', { userId, error: error.message });
     }
   }
 
@@ -309,7 +498,7 @@ export class BotHandler {
         if (!platformEmoji[link.platform as Platform]) {
           continue;
         }
-        
+
         const status = link.is_active ? '✅ Активна' : '❌ Неактивна';
         const keyboard = {
           inline_keyboard: [
@@ -354,7 +543,7 @@ export class BotHandler {
       }
 
       const links = await this.db.getUserLinks(user.id);
-      
+
       if (links.length === 0) {
         await this.bot.sendMessage(chatId, '📋 У вас нет ссылок для удаления.');
         return;
@@ -390,7 +579,7 @@ export class BotHandler {
       }
 
       const links = await this.db.getUserLinks(user.id);
-      
+
       for (const link of links) {
         await this.db.deleteLink(link.id);
       }
@@ -400,7 +589,7 @@ export class BotHandler {
         `✅ Удалено ${links.length} ссылок.`,
         { reply_markup: this.getMainKeyboard() }
       );
-      
+
       logger.info('All links deleted', { userId, count: links.length });
     } catch (error: any) {
       logger.error('Failed to delete all links', { userId, error: error.message });
@@ -437,7 +626,7 @@ export class BotHandler {
       }
 
       const ads = await parser.parseUrl(link.url);
-      const previewAds = ads.slice(0, 5);
+      const previewAds = ads.slice(-5).reverse();
 
       await this.bot.sendMessage(chatId, `📋 Найдено ${ads.length} объявлений. Показываю последние ${previewAds.length}:`);
 
@@ -447,14 +636,32 @@ export class BotHandler {
 
       logger.info('Link checked', { linkId, adsFound: ads.length });
     } catch (error: any) {
-      logger.error('Failed to check link', { linkId, error: error.message });
-      await this.bot.sendMessage(chatId, '❌ Не удалось проверить ссылку.');
+      logger.error('Failed to check link', { linkId, error: error.message, stack: error.stack });
+
+      // Определяем тип ошибки
+      let errorMessage = '❌ Не удалось проверить ссылку.';
+
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение.';
+      } else if (error.response?.status === 403) {
+        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
+      } else if (error.response?.status === 404) {
+        errorMessage = '❌ Страница не найдена. Возможно, ссылка устарела.';
+      } else if (error.response?.status === 429) {
+        errorMessage = '❌ Слишком много запросов. Подождите немного.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
+      } else if (error.message?.includes('timeout')) {
+        errorMessage = '❌ Превышено время ожидания. Попробуйте позже.';
+      }
+
+      await this.bot.sendMessage(chatId, errorMessage);
     }
   }
 
   private async sendAdWithMap(chatId: number, ad: AdData): Promise<void> {
     let message = `${ad.title}\n💰 ${ad.price}`;
-    
+
     if (ad.published_at) {
       const date = new Date(ad.published_at);
       const formattedDate = date.toLocaleString('ru-RU', {
@@ -463,10 +670,11 @@ export class BotHandler {
         year: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
+        timeZone: 'Europe/Minsk',
       });
       message += `\n🕐 ${formattedDate}`;
     }
-    
+
     // Объединяем location и address в одну строку
     const addressParts = [];
     if (ad.location) addressParts.push(ad.location);
@@ -474,15 +682,15 @@ export class BotHandler {
     if (addressParts.length > 0) {
       message += `\n📍 ${addressParts.join(', ')}`;
     }
-    
+
     message += `\n🔗 ${ad.ad_url}`;
-    
+
     // Сначала отправляем текст
     await this.bot.sendMessage(chatId, message);
-    
+
     // Подготавливаем медиа
     const media: any[] = [];
-    
+
     // Добавляем фото объявления
     if (ad.image_url) {
       media.push({
@@ -490,7 +698,7 @@ export class BotHandler {
         media: ad.image_url,
       });
     }
-    
+
     // Добавляем карту если есть адрес
     if ((ad.location || ad.address) && this.yandexMaps) {
       try {
@@ -498,7 +706,7 @@ export class BotHandler {
         if (ad.location) addressParts.push(ad.location);
         if (ad.address) addressParts.push(ad.address);
         const fullAddress = addressParts.join(', ');
-        
+
         const mapUrl = await this.yandexMaps.getMapForAddress(fullAddress);
         if (mapUrl) {
           media.push({
@@ -510,34 +718,112 @@ export class BotHandler {
         logger.warn('Failed to get map', { error: error.message });
       }
     }
-    
+
     // Отправляем картинки
     if (media.length > 0) {
       try {
         await this.bot.sendMediaGroup(chatId, media);
       } catch (error: any) {
         logger.warn('Failed to send media group', { error: error.message });
+        // Если не удалось отправить медиагруппу, пробуем отправить хотя бы первое фото
+        if (media.length > 0 && media[0].media) {
+          try {
+            await this.bot.sendPhoto(chatId, media[0].media);
+          } catch (photoError: any) {
+            logger.warn('Failed to send photo fallback', { error: photoError.message });
+          }
+        }
       }
     }
   }
 
-  async sendNotification(chatId: number, ad: Ad): Promise<void> {
+  async sendNotification(telegramId: number, ad: Ad): Promise<void> {
     try {
-      const message = `📢 Новое объявление!\n\n` +
-        `${ad.title}\n\n` +
-        `💰 ${ad.price || 'Цена не указана'}\n\n` +
-        `🔗 ${ad.ad_url}`;
+      let message = `📢 Новое объявление!\n\n${ad.title}\n💰 ${ad.price || 'Договорная'}`;
 
+      // Используем время публикации объявления, если есть
+      const dateToShow = ad.published_at || ad.created_at;
+      if (dateToShow) {
+        const date = new Date(dateToShow);
+        const formattedDate = date.toLocaleString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Europe/Minsk',
+        });
+        message += `\n🕐 ${formattedDate}`;
+      }
+
+      // Объединяем location и address в одну строку
+      const addressParts = [];
+      if ((ad as any).location) addressParts.push((ad as any).location);
+      if ((ad as any).address) addressParts.push((ad as any).address);
+      if (addressParts.length > 0) {
+        message += `\n📍 ${addressParts.join(', ')}`;
+      }
+
+      message += `\n🔗 ${ad.ad_url}`;
+
+      // Отправляем текст
+      await this.bot.sendMessage(telegramId, message);
+
+      // Задержка перед отправкой медиа
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Подготавливаем медиа
+      const media: any[] = [];
+
+      // Добавляем фото объявления
       if (ad.image_url) {
-        await this.bot.sendPhoto(chatId, ad.image_url, { caption: message });
-      } else {
-        await this.bot.sendMessage(chatId, message);
+        media.push({
+          type: 'photo',
+          media: ad.image_url,
+        });
+      }
+
+      // Добавляем карту если есть адрес
+      if ((addressParts.length > 0) && this.yandexMaps) {
+        try {
+          const fullAddress = addressParts.join(', ');
+          const mapUrl = await this.yandexMaps.getMapForAddress(fullAddress);
+          if (mapUrl) {
+            media.push({
+              type: 'photo',
+              media: mapUrl,
+            });
+          }
+        } catch (error: any) {
+          logger.warn('Failed to get map for notification', { error: error.message });
+        }
+      }
+
+      // Отправляем картинки
+      if (media.length > 0) {
+        try {
+          await this.bot.sendMediaGroup(telegramId, media);
+        } catch (error: any) {
+          logger.warn('Failed to send media group in notification', { error: error.message });
+          // Если не удалось отправить медиагруппу, пробуем отправить хотя бы первое фото
+          if (media.length > 0 && media[0].media) {
+            try {
+              await this.bot.sendPhoto(telegramId, media[0].media);
+            } catch (photoError: any) {
+              logger.warn('Failed to send photo fallback in notification', { error: photoError.message });
+            }
+          }
+        }
       }
     } catch (error: any) {
       if (error.response?.statusCode === 403) {
-        logger.warn('User blocked bot', { chatId });
+        logger.warn('User blocked bot', { telegramId });
       } else {
-        logger.error('Failed to send notification', { chatId, error: error.message });
+        logger.error('Failed to send notification', {
+          telegramId,
+          adId: ad.id,
+          error: error.message
+        });
       }
     }
   }
@@ -559,7 +845,7 @@ export class BotHandler {
       const addressParts = [];
       if (ad.location) addressParts.push(ad.location);
       if (ad.address) addressParts.push(ad.address);
-      
+
       const fullAddress = addressParts.join(', ');
       if (!fullAddress) {
         await this.bot.sendMessage(chatId, '❌ Адрес не указан в объявлении.');
@@ -570,7 +856,7 @@ export class BotHandler {
 
       // Получаем URL картинки карты
       const mapImageUrl = await this.yandexMaps.getMapImageForAddress(fullAddress);
-      
+
       if (!mapImageUrl) {
         await this.bot.sendMessage(chatId, '❌ Не удалось найти адрес на карте. Попробуйте позже.');
         return;
@@ -583,8 +869,24 @@ export class BotHandler {
 
       logger.info('Map sent successfully', { adId, address: fullAddress });
     } catch (error: any) {
-      logger.error('Failed to show map', { adId, error: error.message });
-      await this.bot.sendMessage(chatId, '❌ Произошла ошибка при загрузке карты.');
+      logger.error('Failed to show map', { adId, error: error.message, stack: error.stack });
+
+      // Определяем тип ошибки
+      let errorMessage = '❌ Произошла ошибка при загрузке карты.';
+
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        errorMessage = '❌ Не удалось подключиться к сервису карт. Проверьте интернет-соединение.';
+      } else if (error.response?.status === 403) {
+        errorMessage = '❌ Доступ к сервису карт ограничен. Попробуйте позже.';
+      } else if (error.response?.status === 429) {
+        errorMessage = '❌ Превышен лимит запросов к картам. Подождите немного.';
+      } else if (error.message?.includes('timeout')) {
+        errorMessage = '❌ Превышено время ожидания ответа от сервиса карт.';
+      } else if (error.message?.includes('not found') || error.message?.includes('адрес')) {
+        errorMessage = '❌ Не удалось найти указанный адрес на карте.';
+      }
+
+      await this.bot.sendMessage(chatId, errorMessage);
     }
   }
 

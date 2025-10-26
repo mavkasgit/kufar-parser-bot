@@ -23,6 +23,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DATABASE_URL: postgresql://bot_user:${DB_PASSWORD:-secure_password}@postgres:5432/kufar_bot
       YANDEX_MAPS_API_KEY: ${YANDEX_MAPS_API_KEY}
+      PARSE_INTERVAL_SECONDS: ${PARSE_INTERVAL_SECONDS:-300}
       NODE_ENV: production
     depends_on:
       postgres:

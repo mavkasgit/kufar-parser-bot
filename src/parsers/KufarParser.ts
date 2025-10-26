@@ -20,6 +20,7 @@ export class KufarParser extends BaseParser {
       // Parse URL to extract search parameters
       const urlObj = new URL(url);
       const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      const locationPart = pathParts[1]; // Второй элемент после /l/ или /re/
       
       // Extract category and region from URL
       let cat = '';
@@ -159,6 +160,7 @@ export class KufarParser extends BaseParser {
           'mir': '3',
           'mosty': '3',
           'ostrovets': '3',
+          'ostrovec': '3', // Альтернативное написание
           'oshmyany': '3',
           'svisloch': '3',
           'skidel': '3',
@@ -310,41 +312,30 @@ export class KufarParser extends BaseParser {
         return [];
       }
 
-      // Определяем нужный город для фильтрации (если указан конкретный город)
+      // Определяем нужный город для фильтрации
       let filterCity: string | null = null;
-      const locationPart = pathParts[1]; // Второй элемент после /l/
       
-      // Список областных центров (не фильтруем, т.к. они совпадают с областью)
-      const regionalCenters = ['minsk', 'brest', 'vitebsk', 'gomel', 'grodno', 'mogilev'];
+      // Если в URL есть gtsy параметр, НЕ фильтруем - API уже отфильтровал
+      const hasGtsyInParams = params.gtsy !== undefined;
       
-      if (locationPart && !locationPart.includes('-oblast') && !regionalCenters.includes(locationPart)) {
-        // Это конкретный город (не областной центр)
+      // Фильтруем только если нет gtsy и указан конкретный город
+      if (!hasGtsyInParams && locationPart && !locationPart.includes('-oblast')) {
         filterCity = locationPart.replace('r~', ''); // Убираем r~ если есть
-      }
-      
-      // Если есть gtsy с конкретной локацией, используем её
-      if (gtsy && gtsy.includes('locality-')) {
-        const localityMatch = gtsy.match(/locality-([^~]+)/);
-        if (localityMatch) {
-          const locality = localityMatch[1].replace(/_/g, ' ');
-          // Проверяем что это не областной центр
-          if (!regionalCenters.includes(locality.toLowerCase())) {
-            filterCity = locality;
-          }
-        }
       }
 
       let allAds = uniqueAds.map((ad: any) => {
         // Цена в копейках, делим на 100 (как в lonesomestranger/avby-kufar-notifier)
         let priceStr = '';
-        if (ad.price_byn) {
+        if (ad.price_byn && ad.price_byn > 0) {
           const priceInByn = (ad.price_byn / 100).toFixed(2);
           priceStr = `${priceInByn} BYN`;
-        } else if (ad.price_usd) {
+        } else if (ad.price_usd && ad.price_usd > 0) {
           const priceInUsd = (ad.price_usd / 100).toFixed(2);
           priceStr = `${priceInUsd} USD`;
         } else if (ad.price) {
           priceStr = ad.price;
+        } else {
+          priceStr = 'Договорная';
         }
 
         // Обработка изображений (как в lonesomestranger)
@@ -512,6 +503,7 @@ export class KufarParser extends BaseParser {
           'mosty': ['мосты'],
           'novogrudok': ['новогрудок'],
           'ostrovets': ['островец'],
+          'ostrovec': ['островец'], // Альтернативное написание
           'oshmyany': ['ошмяны'],
           'svisloch': ['свислочь'],
           'skidel': ['скидель'],

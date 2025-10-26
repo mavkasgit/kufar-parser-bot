@@ -117,7 +117,21 @@ export class OnlinerParser extends BaseParser {
 
       const ads: AdData[] = response.data.apartments.map((apt: any) => {
         // Формируем заголовок из характеристик квартиры
-        const rooms = apt.rent_type || '';
+        // Преобразуем rent_type в читаемый формат
+        let rooms = '';
+        if (apt.rent_type) {
+          const rentTypeMap: Record<string, string> = {
+            '1_room': '1-комнатная',
+            '2_rooms': '2-комнатная',
+            '3_rooms': '3-комнатная',
+            '4_rooms': '4-комнатная',
+            '5_rooms': '5-комнатная',
+            '6_rooms': '6-комнатная',
+            'studio': 'Студия',
+          };
+          rooms = rentTypeMap[apt.rent_type] || apt.rent_type;
+        }
+        
         const area = apt.area?.total ? `${apt.area.total} м²` : '';
         const floor = apt.floor ? `${apt.floor} этаж` : '';
         

@@ -53,6 +53,14 @@ export class DatabaseService {
     return result.rows[0] || null;
   }
 
+  async getUserById(userId: number): Promise<User | null> {
+    const result = await this.pool.query<User>(
+      'SELECT * FROM users WHERE id = $1',
+      [userId]
+    );
+    return result.rows[0] || null;
+  }
+
   // Link operations
   async createLink(userId: number, url: string, platform: Platform): Promise<Link> {
     const result = await this.pool.query<Link>(
@@ -128,11 +136,22 @@ export class DatabaseService {
   // Ad operations
   async createAd(linkId: number, adData: AdData): Promise<Ad> {
     const result = await this.pool.query<Ad>(
-      `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) 
+      `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url, location, address, published_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
        ON CONFLICT (external_id) DO NOTHING 
        RETURNING *`,
-      [linkId, adData.external_id, adData.title, adData.description || null, adData.price || null, adData.image_url || null, adData.ad_url]
+      [
+        linkId, 
+        adData.external_id, 
+        adData.title, 
+        adData.description || null, 
+        adData.price || null, 
+        adData.image_url || null, 
+        adData.ad_url,
+        adData.location || null,
+        adData.address || null,
+        adData.published_at || null
+      ]
     );
     return result.rows[0];
   }

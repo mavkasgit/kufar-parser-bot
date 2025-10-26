@@ -8,25 +8,42 @@ export class ParserScheduler {
   private db: DatabaseService;
   private bot: BotHandler;
   private task: cron.ScheduledTask | null = null;
+  private intervalId: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
-  private lastNotificationTime: Map<number, number> = new Map();
+  private intervalMs: number;
 
   constructor(db: DatabaseService, bot: BotHandler) {
     this.db = db;
     this.bot = bot;
+    
+    // Читаем интервал из переменной окружения (в секундах)
+    // По умолчанию 300 секунд (5 минут)
+    const intervalSeconds = parseInt(process.env.PARSE_INTERVAL_SECONDS || '300', 10);
+    this.intervalMs = intervalSeconds * 1000;
+    
+    logger.info('Parser scheduler configured', { 
+      intervalSeconds, 
+      intervalMinutes: (intervalSeconds / 60).toFixed(1) 
+    });
   }
 
   start(): void {
-    // Run every minute
-    this.task = cron.schedule('* * * * *', async () => {
+    // Запускаем сразу при старте
+    this.runParsing();
+    
+    // Затем запускаем по интервалу
+    this.intervalId = setInterval(async () => {
       if (this.isRunning) {
         logger.warn('Previous parsing still running, skipping this cycle');
         return;
       }
       await this.runParsing();
-    });
+    }, this.intervalMs);
 
-    logger.info('Parser scheduler started (runs every minute)');
+    logger.info('Parser scheduler started', { 
+      intervalMs: this.intervalMs,
+      intervalMinutes: (this.intervalMs / 60000).toFixed(1)
+    });
   }
 
   async runParsing(): Promise<void> {
@@ -75,30 +92,71 @@ export class ParserScheduler {
       }
 
       // Process new ads
-      let newAdsCount = 0;
+      const newAds: any[] = [];
       for (const adData of ads) {
         const isNew = await this.db.isNewAd(adData.external_id);
         if (isNew) {
           const ad = await this.db.createAd(link.id, adData);
           if (ad) {
-            // Check notification throttling (max 1 per minute per link)
-            const lastNotif = this.lastNotificationTime.get(link.id) || 0;
-            const now = Date.now();
-            if (now - lastNotif >= 60000) {
-              // Get user's telegram_id
-              const user = await this.db.getUser(link.user_id);
-              if (user) {
-                await this.bot.sendNotification(user.telegram_id, ad);
-                this.lastNotificationTime.set(link.id, now);
-                newAdsCount++;
-              }
-            }
+            newAds.push(ad);
           }
         }
       }
 
-      if (newAdsCount > 0) {
-        logger.info('New ads found and notified', { linkId: link.id, newAdsCount });
+      logger.info('Processed ads for link', { 
+        linkId: link.id, 
+        totalAds: ads.length, 
+        newAds: newAds.length 
+      });
+
+      // Send notifications for new ads (max 5 per cycle to avoid spam)
+      if (newAds.length > 0) {
+        logger.info('Attempting to send notifications', { 
+          linkId: link.id, 
+          userId: link.user_id,
+          newAdsCount: newAds.length 
+        });
+        
+        const user = await this.db.getUserById(link.user_id);
+        if (!user) {
+          logger.error('User not found for link', { linkId: link.id, userId: link.user_id });
+          return;
+        }
+        
+        logger.info('User found, sending notifications', { 
+          userId: user.id, 
+          telegramId: user.telegram_id 
+        });
+        
+        // Берем последние 5 объявлений (самые новые)
+        const lastFive = newAds.slice(-5);
+        // Разворачиваем массив чтобы отправлять от старого к новому (самое новое будет последним)
+        const adsToNotify = lastFive.reverse();
+        
+        for (const ad of adsToNotify) {
+          try {
+            logger.info('Sending notification for ad', { 
+              adId: ad.id, 
+              telegramId: user.telegram_id 
+            });
+            await this.bot.sendNotification(user.telegram_id, ad);
+            // Delay between notifications to prevent message merging
+            await this.sleep(3000);
+          } catch (error: any) {
+            logger.error('Failed to send notification', { 
+              linkId: link.id, 
+              adId: ad.id, 
+              error: error.message,
+              stack: error.stack
+            });
+          }
+        }
+        
+        logger.info('New ads found and notified', { 
+          linkId: link.id, 
+          totalNew: newAds.length,
+          notified: adsToNotify.length 
+        });
       }
     } catch (error: any) {
       logger.error('Failed to parse link', { linkId: link.id, url: link.url, error: error.message });
@@ -121,7 +179,10 @@ export class ParserScheduler {
   stop(): void {
     if (this.task) {
       this.task.stop();
-      logger.info('Parser scheduler stopped');
     }
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
+    logger.info('Parser scheduler stopped');
   }
 }

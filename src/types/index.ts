@@ -26,6 +26,7 @@ export interface Ad {
   image_url: string | null;
   ad_url: string;
   created_at: Date;
+  published_at?: Date | null;
 }
 
 export interface AdData {
