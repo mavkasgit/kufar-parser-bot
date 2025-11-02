@@ -372,9 +372,16 @@ export class BotHandler {
         `Найдено объявлений: ${testAds.length}`
       );
 
-      // Показываем превью (от старого к новому)
-      const previewAds = testAds.slice(-5).reverse();
-      await this.bot.sendMessage(chatId, `📋 Последние ${previewAds.length} объявлений:`);
+      // Показываем превью - 5 самых свежих по дате
+      const sortedAds = testAds.sort((a, b) => {
+        const dateA = a.updated_at || a.published_at || new Date(0);
+        const dateB = b.updated_at || b.published_at || new Date(0);
+        const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
+        const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
+        return timeA - timeB; // От старых к новым (чтобы самое новое было последним в чате)
+      });
+      const previewAds = sortedAds.slice(-5); // Берем последние 5 (самые новые)
+      await this.bot.sendMessage(chatId, `📋 5 самых свежих объявлений:`);
 
       for (const ad of previewAds) {
         await this.sendAdWithMap(chatId, ad);
@@ -630,9 +637,19 @@ export class BotHandler {
       }
 
       const ads = await parser.parseUrl(link.url);
-      const previewAds = ads.slice(-5).reverse();
+      
+      // Сортируем по дате - от старых к новым (чтобы самое новое было последним в чате)
+      const sortedAds = ads.sort((a, b) => {
+        const dateA = a.updated_at || a.published_at || new Date(0);
+        const dateB = b.updated_at || b.published_at || new Date(0);
+        const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
+        const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
+        return timeA - timeB; // От старых к новым
+      });
+      
+      const previewAds = sortedAds.slice(-5); // Берем последние 5 (самые новые)
 
-      await this.bot.sendMessage(chatId, `📋 Найдено ${ads.length} объявлений. Показываю последние ${previewAds.length}:`);
+      await this.bot.sendMessage(chatId, `📋 Найдено ${ads.length} объявлений. Показываю 5 самых свежих:`);
 
       for (const ad of previewAds) {
         await this.sendAdWithMap(chatId, ad);
@@ -666,9 +683,10 @@ export class BotHandler {
   private async sendAdWithMap(chatId: number, ad: AdData): Promise<void> {
     let message = `${ad.title}\n💰 ${ad.price}`;
 
+    // Показываем дату публикации и обновления
     if (ad.published_at) {
-      const date = new Date(ad.published_at);
-      const formattedDate = date.toLocaleString('ru-RU', {
+      const publishedDate = new Date(ad.published_at);
+      const formattedPublished = publishedDate.toLocaleString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -676,7 +694,31 @@ export class BotHandler {
         minute: '2-digit',
         timeZone: 'Europe/Minsk',
       });
-      message += `\n🕐 ${formattedDate}`;
+      
+      // Если есть дата обновления и она отличается от даты публикации
+      if (ad.updated_at) {
+        const updatedDate = new Date(ad.updated_at);
+        const timeDiff = updatedDate.getTime() - publishedDate.getTime();
+        const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+        
+        // Если объявление обновлялось (разница больше 1 дня)
+        if (daysDiff > 1) {
+          const formattedUpdated = updatedDate.toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'Europe/Minsk',
+          });
+          message += `\n🕐 Опубликовано: ${formattedPublished}`;
+          message += `\n🔄 Поднято: ${formattedUpdated}`;
+        } else {
+          message += `\n🕐 ${formattedPublished}`;
+        }
+      } else {
+        message += `\n🕐 ${formattedPublished}`;
+      }
     }
 
     // Объединяем location и address в одну строку
@@ -745,11 +787,10 @@ export class BotHandler {
     try {
       let message = `📢 Новое объявление!\n\n${ad.title}\n💰 ${ad.price || 'Договорная'}`;
 
-      // Используем время публикации объявления, если есть
-      const dateToShow = ad.published_at || ad.created_at;
-      if (dateToShow) {
-        const date = new Date(dateToShow);
-        const formattedDate = date.toLocaleString('ru-RU', {
+      // Показываем дату публикации и обновления
+      if (ad.published_at) {
+        const publishedDate = new Date(ad.published_at);
+        const formattedPublished = publishedDate.toLocaleString('ru-RU', {
           day: '2-digit',
           month: '2-digit',
           year: 'numeric',
@@ -757,7 +798,31 @@ export class BotHandler {
           minute: '2-digit',
           timeZone: 'Europe/Minsk',
         });
-        message += `\n🕐 ${formattedDate}`;
+        
+        // Если есть дата обновления и она отличается от даты публикации
+        if (ad.updated_at) {
+          const updatedDate = new Date(ad.updated_at);
+          const timeDiff = updatedDate.getTime() - publishedDate.getTime();
+          const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+          
+          // Если объявление обновлялось (разница больше 1 дня)
+          if (daysDiff > 1) {
+            const formattedUpdated = updatedDate.toLocaleString('ru-RU', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'Europe/Minsk',
+            });
+            message += `\n🕐 Опубликовано: ${formattedPublished}`;
+            message += `\n🔄 Поднято: ${formattedUpdated}`;
+          } else {
+            message += `\n🕐 ${formattedPublished}`;
+          }
+        } else {
+          message += `\n🕐 ${formattedPublished}`;
+        }
       }
 
       // Объединяем location и address в одну строку

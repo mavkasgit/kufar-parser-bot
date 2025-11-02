@@ -136,8 +136,8 @@ export class DatabaseService {
   // Ad operations
   async createAd(linkId: number, adData: AdData): Promise<Ad> {
     const result = await this.pool.query<Ad>(
-      `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url, location, address, published_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+      `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url, location, address, published_at, updated_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
        ON CONFLICT (link_id, external_id) DO NOTHING 
        RETURNING *`,
       [
@@ -150,7 +150,8 @@ export class DatabaseService {
         adData.ad_url,
         adData.location || null,
         adData.address || null,
-        adData.published_at || null
+        adData.published_at || null,
+        adData.updated_at || null
       ]
     );
     return result.rows[0];

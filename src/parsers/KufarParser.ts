@@ -195,6 +195,10 @@ export class KufarParser extends BaseParser {
         const addressParam = ad.account_parameters?.find((p: any) => p.p === 'address');
         const address = addressParam?.v;
 
+        // Извлекаем дату публикации и обновления
+        const publishedAt = new Date(ad.list_time);
+        const updatedAt = ad.list_time_up ? new Date(ad.list_time_up) : undefined;
+
         return {
           external_id: String(ad.ad_id),
           title: ad.subject,
@@ -204,7 +208,8 @@ export class KufarParser extends BaseParser {
           ad_url: ad.ad_link,
           location: location || undefined,
           address: address || undefined,
-          published_at: new Date(ad.list_time),
+          published_at: publishedAt,
+          updated_at: updatedAt,
           _rawLocation: (location || '').toLowerCase(), // Временное поле для фильтрации
         };
       });

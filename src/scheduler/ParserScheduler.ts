@@ -128,15 +128,24 @@ export class ParserScheduler {
           telegramId: user.telegram_id 
         });
         
-        // Сортируем объявления по дате публикации (от старых к новым)
+        // Сортируем объявления по дате обновления (если есть) или по ID
+        // Приоритет: updated_at > published_at > id
         const sortedAds = newAds.sort((a, b) => {
-          const dateA = a.published_at ? new Date(a.published_at).getTime() : 0;
-          const dateB = b.published_at ? new Date(b.published_at).getTime() : 0;
-          return dateA - dateB;
+          const dateA = a.updated_at || a.published_at || new Date(0);
+          const dateB = b.updated_at || b.published_at || new Date(0);
+          const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
+          const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
+          
+          // Если даты одинаковые, сортируем по ID
+          if (timeA === timeB) {
+            return b.id - a.id;
+          }
+          
+          return timeB - timeA; // От новых к старым
         });
         
-        // Берем последние 5 объявлений (самые новые по дате публикации)
-        const adsToNotify = sortedAds.slice(-5);
+        // Берем первые 5 объявлений (самые свежие)
+        const adsToNotify = sortedAds.slice(0, 5);
         
         for (const ad of adsToNotify) {
           try {

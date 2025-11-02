@@ -27,6 +27,7 @@ export interface Ad {
   ad_url: string;
   created_at: Date;
   published_at?: Date | null;
+  updated_at?: Date | null; // Дата последнего обновления/поднятия
 }
 
 export interface AdData {
@@ -39,6 +40,7 @@ export interface AdData {
   location?: string; // Город/область
   address?: string;  // Адрес
   published_at?: Date; // Время публикации
+  updated_at?: Date; // Дата последнего обновления/поднятия
 }
 
 export type Platform = 'kufar' | 'onliner' | 'av';

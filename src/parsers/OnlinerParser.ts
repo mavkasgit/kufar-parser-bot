@@ -162,10 +162,16 @@ export class OnlinerParser extends BaseParser {
           }
         }
         
-        // Извлекаем дату публикации
+        // Извлекаем дату публикации и обновления
         let publishedAt: Date | undefined;
+        let updatedAt: Date | undefined;
+        
         if (apt.created_at) {
           publishedAt = new Date(apt.created_at);
+        }
+        
+        if (apt.last_time_up) {
+          updatedAt = new Date(apt.last_time_up);
         }
 
         return {
@@ -177,6 +183,7 @@ export class OnlinerParser extends BaseParser {
           location: location || undefined,
           address: address || undefined,
           published_at: publishedAt,
+          updated_at: updatedAt,
         };
       });
 
