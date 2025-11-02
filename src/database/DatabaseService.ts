@@ -138,7 +138,7 @@ export class DatabaseService {
     const result = await this.pool.query<Ad>(
       `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url, location, address, published_at) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-       ON CONFLICT (external_id) DO NOTHING 
+       ON CONFLICT (link_id, external_id) DO NOTHING 
        RETURNING *`,
       [
         linkId, 
@@ -167,5 +167,13 @@ export class DatabaseService {
   async isNewAd(externalId: string): Promise<boolean> {
     const ad = await this.getAdByExternalId(externalId);
     return ad === null;
+  }
+
+  async isNewAdForLink(linkId: number, externalId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'SELECT id FROM ads WHERE link_id = $1 AND external_id = $2',
+      [linkId, externalId]
+    );
+    return result.rows.length === 0;
   }
 }

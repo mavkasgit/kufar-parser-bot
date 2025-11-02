@@ -1,4 +1,4 @@
-бля бдаваimport 'dotenv/config';
+import 'dotenv/config';
 import { KufarParser } from './parsers/KufarParser';
 import { AdData } from './types';
 import { YandexMapsService } from './services/YandexMapsService';

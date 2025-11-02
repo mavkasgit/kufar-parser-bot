@@ -94,7 +94,7 @@ export class ParserScheduler {
       // Process new ads
       const newAds: any[] = [];
       for (const adData of ads) {
-        const isNew = await this.db.isNewAd(adData.external_id);
+        const isNew = await this.db.isNewAdForLink(link.id, adData.external_id);
         if (isNew) {
           const ad = await this.db.createAd(link.id, adData);
           if (ad) {
