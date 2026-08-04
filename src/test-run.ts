@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import { KufarParser } from './parsers/KufarParser';
-import { AdData } from './types';
+import { Ad } from './types';
 import { YandexMapsService } from './services/YandexMapsService';
 
 // Simplified version of BotHandler's sendAdWithMap for demonstration
-async function displayAd(ad: AdData, yandexMaps: YandexMapsService | null) {
+async function displayAd(ad: Ad, yandexMaps: YandexMapsService | null) {
   let message = `
 ----------------------------------------
 `;

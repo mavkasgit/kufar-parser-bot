@@ -32,9 +32,19 @@ CREATE TABLE IF NOT EXISTS ads (
   price VARCHAR(100),
   image_url TEXT,
   ad_url TEXT NOT NULL,
+  location TEXT,
+  address TEXT,
+  published_at TIMESTAMP,
+  updated_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_ads_link_id ON ads(link_id);
 CREATE INDEX IF NOT EXISTS idx_ads_external_id ON ads(external_id);
 CREATE INDEX IF NOT EXISTS idx_ads_created_at ON ads(created_at);
+
+-- Migration for existing databases created before these columns existed
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS location TEXT;
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS published_at TIMESTAMP;
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;

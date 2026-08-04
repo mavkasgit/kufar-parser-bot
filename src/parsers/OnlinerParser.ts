@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { BaseParser } from './BaseParser';
-import { AdData } from '../types';
+import { Ad } from '../types';
 import { logger } from '../utils/logger';
 
 export class OnlinerParser extends BaseParser {
@@ -18,7 +18,7 @@ export class OnlinerParser extends BaseParser {
     }
   }
 
-  async parseUrl(url: string): Promise<AdData[]> {
+  async parseUrl(url: string): Promise<Ad[]> {
     try {
       const urlObj = new URL(url);
       
@@ -30,7 +30,7 @@ export class OnlinerParser extends BaseParser {
       // Regular baraholka/ab parsing
       const html = await this.fetchWithRetry(url);
       const $ = cheerio.load(html);
-      const ads: AdData[] = [];
+      const ads: Ad[] = [];
 
       // Baraholka parsing
       $('.classified__item, .vehicle-item').each((_: number, element: any) => {
@@ -65,7 +65,7 @@ export class OnlinerParser extends BaseParser {
     }
   }
 
-  private async parseRealEstateMap(url: string): Promise<AdData[]> {
+  private async parseRealEstateMap(url: string): Promise<Ad[]> {
     try {
       // Parse URL to extract search parameters
       const urlObj = new URL(url);
@@ -115,7 +115,7 @@ export class OnlinerParser extends BaseParser {
         return [];
       }
 
-      const ads: AdData[] = response.data.apartments.map((apt: any) => {
+      const ads: Ad[] = response.data.apartments.map((apt: any) => {
         // Формируем заголовок из характеристик квартиры
         // Преобразуем rent_type в читаемый формат
         let rooms = '';
@@ -141,7 +141,8 @@ export class OnlinerParser extends BaseParser {
         const price = apt.price?.amount ? `${apt.price.amount} ${apt.price.currency}` : '';
         // URL может быть в apt.url или формируется из apt.id
         const adUrl = apt.url || `https://r.onliner.by/ak/apartments/${apt.id}`;
-        const imageUrl = apt.photo?.url;
+        // photo может быть строкой с URL или объектом { url }
+        const imageUrl = typeof apt.photo === 'string' ? apt.photo : apt.photo?.url;
         
         // Извлекаем город и адрес
         // user_address обычно содержит полный адрес "Город, Улица, Дом"

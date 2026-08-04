@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { User, Link, Ad, AdData, Platform } from '../types';
+import { User, Link, Ad, Platform } from '../types';
 import { logger } from '../utils/logger';
 
 export class DatabaseService {
@@ -134,11 +134,11 @@ export class DatabaseService {
   }
 
   // Ad operations
-  async createAd(linkId: number, adData: AdData): Promise<Ad> {
+  async createAd(linkId: number, adData: Ad): Promise<Ad> {
     const result = await this.pool.query<Ad>(
       `INSERT INTO ads (link_id, external_id, title, description, price, image_url, ad_url, location, address, published_at, updated_at) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
-       ON CONFLICT (link_id, external_id) DO NOTHING 
+       ON CONFLICT (external_id) DO NOTHING 
        RETURNING *`,
       [
         linkId, 

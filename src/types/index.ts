@@ -17,30 +17,19 @@ export interface Link {
 }
 
 export interface Ad {
-  id: number;
-  link_id: number;
+  id?: number;
+  link_id?: number;
   external_id: string;
   title: string;
-  description: string | null;
-  price: string | null;
-  image_url: string | null;
+  description?: string | null;
+  price?: string | null;
+  image_url?: string | null;
   ad_url: string;
-  created_at: Date;
+  location?: string | null;
+  address?: string | null;
+  created_at?: Date;
   published_at?: Date | null;
-  updated_at?: Date | null; // Дата последнего обновления/поднятия
-}
-
-export interface AdData {
-  external_id: string;
-  title: string;
-  description?: string;
-  price?: string;
-  image_url?: string;
-  ad_url: string;
-  location?: string; // Город/область
-  address?: string;  // Адрес
-  published_at?: Date; // Время публикации
-  updated_at?: Date; // Дата последнего обновления/поднятия
+  updated_at?: Date | null;
 }
 
 export type Platform = 'kufar' | 'onliner' | 'av';

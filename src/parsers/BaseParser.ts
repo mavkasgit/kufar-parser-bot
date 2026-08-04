@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { IParser } from './IParser';
-import { AdData, Platform } from '../types';
+import { Ad, Platform } from '../types';
 import { logger } from '../utils/logger';
 
 export abstract class BaseParser implements IParser {
@@ -62,6 +62,6 @@ export abstract class BaseParser implements IParser {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  abstract parseUrl(url: string): Promise<AdData[]>;
+  abstract parseUrl(url: string): Promise<Ad[]>;
   abstract validateUrl(url: string): boolean;
 }

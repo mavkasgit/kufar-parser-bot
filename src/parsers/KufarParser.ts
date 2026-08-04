@@ -1,5 +1,5 @@
 import { BaseParser } from './BaseParser';
-import { AdData } from '../types';
+import { Ad } from '../types';
 import { logger } from '../utils/logger';
 import { AxiosInstance } from 'axios';
 
@@ -96,7 +96,7 @@ export class KufarParser extends BaseParser {
     }
   }
 
-  async parseUrl(url: string): Promise<AdData[]> {
+  async parseUrl(url: string): Promise<Ad[]> {
     try {
       const urlObj = new URL(url);
       const pathParts = urlObj.pathname.split('/').filter(Boolean);

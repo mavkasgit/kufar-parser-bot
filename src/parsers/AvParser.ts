@@ -1,5 +1,5 @@
 import { BaseParser } from './BaseParser';
-import { AdData } from '../types';
+import { Ad } from '../types';
 import { logger } from '../utils/logger';
 import { AxiosInstance } from 'axios';
 import * as cheerio from 'cheerio';
@@ -20,7 +20,7 @@ export class AvParser extends BaseParser {
     }
   }
 
-  async parseUrl(url: string): Promise<AdData[]> {
+  async parseUrl(url: string): Promise<Ad[]> {
     logger.info('AV.by parsing started', { url });
     try {
       const html = await this.fetchWithRetry(url);
