@@ -1,11 +1,17 @@
 import TelegramBot, { Message, CallbackQuery } from 'node-telegram-bot-api';
 import { DatabaseService } from '../database/DatabaseService';
-import { UrlValidator } from '../utils/urlValidator';
 import { RateLimiter } from '../utils/rateLimiter';
 import { ParserFactory } from '../parsers/ParserFactory';
 import { YandexMapsService } from '../services/YandexMapsService';
-import { Ad, Platform, AdData } from '../types';
+// venue (нативная карточка) отключён. Для включения раскомментируйте и передайте в AdPresenter.
+// import { LocationService } from '../services/LocationService';
+import { AdPresenter } from '../services/AdPresenter';
+import { TelegramSender } from '../services/TelegramSender';
+import { NewAdSelector } from '../services/NewAdSelector';
+import { Ad, Platform } from '../types';
 import { logger } from '../utils/logger';
+import { mapError } from '../utils/errorMapper';
+import { LinkAcceptance } from '../utils/linkAcceptance';
 
 export class BotHandler {
   private bot: TelegramBot;
@@ -13,7 +19,8 @@ export class BotHandler {
   private rateLimiter: RateLimiter;
   private userStates: Map<number, string> = new Map();
   private yandexMaps: YandexMapsService | null = null;
-  private adCache: Map<string, AdData> = new Map(); // Кэш объявлений для показа на карте
+  private adPresenter: AdPresenter;
+  private telegramSender: TelegramSender;
   private pendingLinks: Map<number, string> = new Map(); // userId -> URL для подтверждения
 
   constructor(token: string, db: DatabaseService) {
@@ -23,12 +30,19 @@ export class BotHandler {
 
     // Инициализируем Yandex Maps если есть API ключ
     const yandexApiKey = process.env.YANDEX_MAPS_API_KEY;
+    const staticMapsApiKey = process.env.YANDEX_STATIC_MAPS_API_KEY;
     if (yandexApiKey) {
-      this.yandexMaps = new YandexMapsService(yandexApiKey);
+      this.yandexMaps = new YandexMapsService(yandexApiKey, staticMapsApiKey);
       logger.info('Yandex Maps service initialized');
     } else {
       logger.warn('YANDEX_MAPS_API_KEY not set, map features disabled');
     }
+
+    // venue (нативная карточка) отключён — Yandex static maps работает.
+    // Для включения: const locationService = new LocationService();
+    // и передать locationService вторым аргументом в AdPresenter.
+    this.adPresenter = new AdPresenter(this.yandexMaps);
+    this.telegramSender = new TelegramSender(this.bot);
 
     this.setupHandlers();
   }
@@ -102,9 +116,6 @@ export class BotHandler {
       } else if (data?.startsWith('check_')) {
         const linkId = parseInt(data.replace('check_', ''), 10);
         await this.handleCheckLink(chatId, linkId);
-      } else if (data?.startsWith('map_')) {
-        const adId = data.replace('map_', '');
-        await this.handleShowMap(chatId, adId);
       } else if (data === 'confirm_add_link') {
         await this.handleConfirmAddLink(chatId, userId);
       } else if (data === 'cancel_add_link') {
@@ -185,12 +196,11 @@ export class BotHandler {
         return;
       }
 
-      const validation = UrlValidator.validateUrl(url);
-      if (!validation.valid || !validation.platform) {
-        const errorMsg = validation.error || 'Некорректная ссылка';
+      const assessment = LinkAcceptance.assess(url);
+      if (!assessment.ok || !assessment.platform) {
         await this.bot.sendMessage(
           chatId,
-          `❌ ${errorMsg}\n\n` +
+          `❌ ${assessment.reason || 'Некорректная ссылка'}\n\n` +
           'Поддерживаются страницы поиска:\n' +
           '• kufar.by/l/* (страница с фильтрами)\n' +
           '• ab.onliner.by/brand/model (без ID объявления)\n' +
@@ -198,12 +208,6 @@ export class BotHandler {
           '• r.onliner.by/ak/ (карта с фильтрами)\n' +
           '• av.by/cars/* (страница поиска)'
         );
-        return;
-      }
-
-      const parser = ParserFactory.getParser(validation.platform);
-      if (!parser || !parser.validateUrl(url)) {
-        await this.bot.sendMessage(chatId, '❌ Ссылка не соответствует формату площадки.');
         return;
       }
 
@@ -224,7 +228,12 @@ export class BotHandler {
       // Test parsing before adding link
       await this.bot.sendMessage(chatId, '⏳ Проверяю ссылку...');
 
-      let testAds: AdData[] = [];
+      const parser = ParserFactory.getParser(assessment.platform);
+      if (!parser) {
+        await this.bot.sendMessage(chatId, '❌ Парсер не найден.');
+        return;
+      }
+      let testAds: Ad[] = [];
       try {
         testAds = await parser.parseUrl(url);
 
@@ -252,7 +261,7 @@ export class BotHandler {
       }
 
       // Link is valid, add it to database
-      await this.db.createLink(user.id, url, validation.platform);
+      await this.db.createLink(user.id, url, assessment.platform);
 
       const platformEmoji: Record<Platform, string> = {
         kufar: '🟢',
@@ -270,7 +279,7 @@ export class BotHandler {
 
       await this.bot.sendMessage(
         chatId,
-        `✅ Ссылка добавлена и работает!\n\n${platformEmoji[validation.platform]} ${validation.platform.toUpperCase()}\n${url}\n\n` +
+        `✅ Ссылка добавлена и работает!\n\n${platformEmoji[assessment.platform]} ${assessment.platform.toUpperCase()}\n${url}\n\n` +
         `Найдено объявлений: ${testAds.length}\n\n` +
         'Вы получите уведомление о новых объявлениях.',
         { reply_markup: keyboard }
@@ -280,49 +289,30 @@ export class BotHandler {
       const previewAds = testAds.slice(-5).reverse();
       await this.bot.sendMessage(chatId, `📋 Последние ${previewAds.length} объявлений:`);
 
-      for (const ad of previewAds) {
-        await this.sendAdWithMap(chatId, ad);
+      const formattedAds = await Promise.all(previewAds.map(ad => this.adPresenter.format(ad)));
+      for (const formatted of formattedAds) {
+        await this.telegramSender.send(chatId, formatted);
       }
 
-      logger.info('Link added', { userId, platform: validation.platform, url, adsFound: testAds.length });
+      logger.info('Link added', { userId, platform: assessment.platform, url, adsFound: testAds.length });
     } catch (error: any) {
       logger.error('Failed to add link', { userId, url, error: error.message, stack: error.stack });
-
-      // Определяем тип ошибки и показываем понятное сообщение
-      let errorMessage = '❌ Не удалось добавить ссылку.';
-
-      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение или попробуйте позже.';
-      } else if (error.response?.status === 403) {
-        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
-      } else if (error.response?.status === 404) {
-        errorMessage = '❌ Страница не найдена. Проверьте правильность ссылки.';
-      } else if (error.response?.status === 429) {
-        errorMessage = '❌ Слишком много запросов к сайту. Подождите немного и попробуйте снова.';
-      } else if (error.response?.status >= 500) {
-        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
-      } else if (error.message?.includes('timeout')) {
-        errorMessage = '❌ Превышено время ожидания ответа от сайта. Попробуйте позже.';
-      } else if (error.message?.includes('parse') || error.message?.includes('JSON')) {
-        errorMessage = '❌ Ошибка обработки данных с сайта. Возможно, сайт изменил формат страницы.';
-      }
-
-      await this.bot.sendMessage(chatId, errorMessage);
+      await this.bot.sendMessage(chatId, mapError(error));
     }
   }
 
   async handleDirectLink(chatId: number, userId: number, url: string): Promise<void> {
     try {
       // Проверяем валидность ссылки
-      const validation = UrlValidator.validateUrl(url);
-      if (!validation.valid || !validation.platform) {
-        await this.bot.sendMessage(chatId, '❌ Эта ссылка не поддерживается. Используйте ссылки на Kufar, Onliner или av.by.');
+      const assessment = LinkAcceptance.assess(url);
+      if (!assessment.ok || !assessment.platform) {
+        await this.bot.sendMessage(chatId, `❌ ${assessment.reason || 'Эта ссылка не поддерживается. Используйте ссылки на Kufar, Onliner или av.by.'}`);
         return;
       }
 
-      const parser = ParserFactory.getParser(validation.platform);
-      if (!parser || !parser.validateUrl(url)) {
-        await this.bot.sendMessage(chatId, '❌ Ссылка не соответствует формату площадки.');
+      const parser = ParserFactory.getParser(assessment.platform);
+      if (!parser) {
+        await this.bot.sendMessage(chatId, '❌ Парсер не найден.');
         return;
       }
 
@@ -368,23 +358,17 @@ export class BotHandler {
 
       await this.bot.sendMessage(
         chatId,
-        `${platformEmoji[validation.platform]} ${validation.platform.toUpperCase()}\n${url}\n\n` +
+        `${platformEmoji[assessment.platform]} ${assessment.platform.toUpperCase()}\n${url}\n\n` +
         `Найдено объявлений: ${testAds.length}`
       );
 
-      // Показываем превью - 5 самых свежих по дате
-      const sortedAds = testAds.sort((a, b) => {
-        const dateA = a.updated_at || a.published_at || new Date(0);
-        const dateB = b.updated_at || b.published_at || new Date(0);
-        const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
-        const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
-        return timeA - timeB; // От старых к новым (чтобы самое новое было последним в чате)
-      });
-      const previewAds = sortedAds.slice(-5); // Берем последние 5 (самые новые)
+      // Показываем превью - 5 самых свежих по дате (новые снизу)
+      const previewAds = NewAdSelector.pick(testAds, 5).reverse();
       await this.bot.sendMessage(chatId, `📋 5 самых свежих объявлений:`);
 
-      for (const ad of previewAds) {
-        await this.sendAdWithMap(chatId, ad);
+      const formattedAds = await Promise.all(previewAds.map(ad => this.adPresenter.format(ad)));
+      for (const formatted of formattedAds) {
+        await this.telegramSender.send(chatId, formatted);
       }
 
       // Кнопки подтверждения
@@ -403,27 +387,10 @@ export class BotHandler {
         { reply_markup: confirmKeyboard }
       );
 
-      logger.info('Direct link preview shown', { userId, platform: validation.platform, url, adsFound: testAds.length });
+      logger.info('Direct link preview shown', { userId, platform: assessment.platform, url, adsFound: testAds.length });
     } catch (error: any) {
       logger.error('Failed to handle direct link', { userId, url, error: error.message, stack: error.stack });
-
-      let errorMessage = '❌ Не удалось проверить ссылку.';
-
-      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение.';
-      } else if (error.response?.status === 403) {
-        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
-      } else if (error.response?.status === 404) {
-        errorMessage = '❌ Страница не найдена. Проверьте правильность ссылки.';
-      } else if (error.response?.status === 429) {
-        errorMessage = '❌ Слишком много запросов. Подождите немного.';
-      } else if (error.response?.status >= 500) {
-        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
-      } else if (error.message?.includes('timeout')) {
-        errorMessage = '❌ Превышено время ожидания. Попробуйте позже.';
-      }
-
-      await this.bot.sendMessage(chatId, errorMessage);
+      await this.bot.sendMessage(chatId, mapError(error));
     }
   }
 
@@ -435,8 +402,8 @@ export class BotHandler {
         return;
       }
 
-      const validation = UrlValidator.validateUrl(url);
-      if (!validation.valid || !validation.platform) {
+      const assessment = LinkAcceptance.assess(url);
+      if (!assessment.ok || !assessment.platform) {
         await this.bot.sendMessage(chatId, '❌ Ошибка валидации ссылки.');
         this.pendingLinks.delete(userId);
         return;
@@ -450,7 +417,7 @@ export class BotHandler {
       }
 
       // Добавляем ссылку
-      await this.db.createLink(user.id, url, validation.platform);
+      await this.db.createLink(user.id, url, assessment.platform);
       this.pendingLinks.delete(userId);
 
       await this.bot.sendMessage(
@@ -459,7 +426,7 @@ export class BotHandler {
         { reply_markup: this.getMainKeyboard() }
       );
 
-      logger.info('Link confirmed and added', { userId, platform: validation.platform, url });
+      logger.info('Link confirmed and added', { userId, platform: assessment.platform, url });
     } catch (error: any) {
       logger.error('Failed to confirm add link', { userId, error: error.message });
       await this.bot.sendMessage(chatId, '❌ Не удалось добавить ссылку.');
@@ -638,252 +605,28 @@ export class BotHandler {
 
       const ads = await parser.parseUrl(link.url);
       
-      // Сортируем по дате - от старых к новым (чтобы самое новое было последним в чате)
-      const sortedAds = ads.sort((a, b) => {
-        const dateA = a.updated_at || a.published_at || new Date(0);
-        const dateB = b.updated_at || b.published_at || new Date(0);
-        const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
-        const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
-        return timeA - timeB; // От старых к новым
-      });
-      
-      const previewAds = sortedAds.slice(-5); // Берем последние 5 (самые новые)
+      // Превью - 5 самых свежих (новые снизу)
+      const previewAds = NewAdSelector.pick(ads, 5).reverse();
 
       await this.bot.sendMessage(chatId, `📋 Найдено ${ads.length} объявлений. Показываю 5 самых свежих:`);
 
-      for (const ad of previewAds) {
-        await this.sendAdWithMap(chatId, ad);
+      const formattedAds = await Promise.all(previewAds.map(ad => this.adPresenter.format(ad)));
+      for (const formatted of formattedAds) {
+        await this.telegramSender.send(chatId, formatted);
       }
 
       logger.info('Link checked', { linkId, adsFound: ads.length });
     } catch (error: any) {
       logger.error('Failed to check link', { linkId, error: error.message, stack: error.stack });
-
-      // Определяем тип ошибки
-      let errorMessage = '❌ Не удалось проверить ссылку.';
-
-      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-        errorMessage = '❌ Не удалось подключиться к сайту. Проверьте интернет-соединение.';
-      } else if (error.response?.status === 403) {
-        errorMessage = '❌ Доступ к сайту заблокирован. Попробуйте позже.';
-      } else if (error.response?.status === 404) {
-        errorMessage = '❌ Страница не найдена. Возможно, ссылка устарела.';
-      } else if (error.response?.status === 429) {
-        errorMessage = '❌ Слишком много запросов. Подождите немного.';
-      } else if (error.response?.status >= 500) {
-        errorMessage = '❌ Сайт временно недоступен. Попробуйте позже.';
-      } else if (error.message?.includes('timeout')) {
-        errorMessage = '❌ Превышено время ожидания. Попробуйте позже.';
-      }
-
-      await this.bot.sendMessage(chatId, errorMessage);
-    }
-  }
-
-  private async sendAdWithMap(chatId: number, ad: AdData): Promise<void> {
-    let message = `${ad.title}\n💰 ${ad.price}`;
-
-    // Показываем дату публикации и обновления
-    if (ad.published_at) {
-      const publishedDate = new Date(ad.published_at);
-      const formattedPublished = publishedDate.toLocaleString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'Europe/Minsk',
-      });
-      
-      // Если есть дата обновления и она отличается от даты публикации
-      if (ad.updated_at) {
-        const updatedDate = new Date(ad.updated_at);
-        const timeDiff = updatedDate.getTime() - publishedDate.getTime();
-        const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
-        
-        // Если объявление обновлялось (разница больше 1 дня)
-        if (daysDiff > 1) {
-          const formattedUpdated = updatedDate.toLocaleString('ru-RU', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZone: 'Europe/Minsk',
-          });
-          message += `\n🕐 Опубликовано: ${formattedPublished}`;
-          message += `\n🔄 Поднято: ${formattedUpdated}`;
-        } else {
-          message += `\n🕐 ${formattedPublished}`;
-        }
-      } else {
-        message += `\n🕐 ${formattedPublished}`;
-      }
-    }
-
-    // Объединяем location и address в одну строку
-    const addressParts = [];
-    if (ad.location) addressParts.push(ad.location);
-    if (ad.address) addressParts.push(ad.address);
-    if (addressParts.length > 0) {
-      message += `\n📍 ${addressParts.join(', ')}`;
-    }
-
-    message += `\n🔗 ${ad.ad_url}`;
-
-    // Сначала отправляем текст
-    await this.bot.sendMessage(chatId, message);
-
-    // Подготавливаем медиа
-    const media: any[] = [];
-
-    // Добавляем фото объявления
-    if (ad.image_url) {
-      media.push({
-        type: 'photo',
-        media: ad.image_url,
-      });
-    }
-
-    // Добавляем карту только если есть точный адрес
-    if (ad.address && this.yandexMaps) {
-      try {
-        const addressParts = [];
-        if (ad.location) addressParts.push(ad.location);
-        if (ad.address) addressParts.push(ad.address);
-        const fullAddress = addressParts.join(', ');
-
-        const mapUrl = await this.yandexMaps.getMapForAddress(fullAddress);
-        if (mapUrl) {
-          media.push({
-            type: 'photo',
-            media: mapUrl,
-          });
-        }
-      } catch (error: any) {
-        logger.warn('Failed to get map', { error: error.message });
-      }
-    }
-
-    // Отправляем картинки
-    if (media.length > 0) {
-      try {
-        await this.bot.sendMediaGroup(chatId, media);
-      } catch (error: any) {
-        logger.warn('Failed to send media group', { error: error.message });
-        // Если не удалось отправить медиагруппу, пробуем отправить хотя бы первое фото
-        if (media.length > 0 && media[0].media) {
-          try {
-            await this.bot.sendPhoto(chatId, media[0].media);
-          } catch (photoError: any) {
-            logger.warn('Failed to send photo fallback', { error: photoError.message });
-          }
-        }
-      }
+      await this.bot.sendMessage(chatId, mapError(error));
     }
   }
 
   async sendNotification(telegramId: number, ad: Ad): Promise<void> {
     try {
-      let message = `📢 Новое объявление!\n\n${ad.title}\n💰 ${ad.price || 'Договорная'}`;
-
-      // Показываем дату публикации и обновления
-      if (ad.published_at) {
-        const publishedDate = new Date(ad.published_at);
-        const formattedPublished = publishedDate.toLocaleString('ru-RU', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          timeZone: 'Europe/Minsk',
-        });
-        
-        // Если есть дата обновления и она отличается от даты публикации
-        if (ad.updated_at) {
-          const updatedDate = new Date(ad.updated_at);
-          const timeDiff = updatedDate.getTime() - publishedDate.getTime();
-          const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
-          
-          // Если объявление обновлялось (разница больше 1 дня)
-          if (daysDiff > 1) {
-            const formattedUpdated = updatedDate.toLocaleString('ru-RU', {
-              day: '2-digit',
-              month: '2-digit',
-              year: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-              timeZone: 'Europe/Minsk',
-            });
-            message += `\n🕐 Опубликовано: ${formattedPublished}`;
-            message += `\n🔄 Поднято: ${formattedUpdated}`;
-          } else {
-            message += `\n🕐 ${formattedPublished}`;
-          }
-        } else {
-          message += `\n🕐 ${formattedPublished}`;
-        }
-      }
-
-      // Объединяем location и address в одну строку
-      const addressParts = [];
-      if ((ad as any).location) addressParts.push((ad as any).location);
-      if ((ad as any).address) addressParts.push((ad as any).address);
-      if (addressParts.length > 0) {
-        message += `\n📍 ${addressParts.join(', ')}`;
-      }
-
-      message += `\n🔗 ${ad.ad_url}`;
-
-      // Отправляем текст
-      await this.bot.sendMessage(telegramId, message);
-
-      // Задержка перед отправкой медиа
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Подготавливаем медиа
-      const media: any[] = [];
-
-      // Добавляем фото объявления
-      if (ad.image_url) {
-        media.push({
-          type: 'photo',
-          media: ad.image_url,
-        });
-      }
-
-      // Добавляем карту только если есть точный адрес
-      if ((ad as any).address && this.yandexMaps) {
-        try {
-          const fullAddress = addressParts.join(', ');
-          const mapUrl = await this.yandexMaps.getMapForAddress(fullAddress);
-          if (mapUrl) {
-            media.push({
-              type: 'photo',
-              media: mapUrl,
-            });
-          }
-        } catch (error: any) {
-          logger.warn('Failed to get map for notification', { error: error.message });
-        }
-      }
-
-      // Отправляем картинки
-      if (media.length > 0) {
-        try {
-          await this.bot.sendMediaGroup(telegramId, media);
-        } catch (error: any) {
-          logger.warn('Failed to send media group in notification', { error: error.message });
-          // Если не удалось отправить медиагруппу, пробуем отправить хотя бы первое фото
-          if (media.length > 0 && media[0].media) {
-            try {
-              await this.bot.sendPhoto(telegramId, media[0].media);
-            } catch (photoError: any) {
-              logger.warn('Failed to send photo fallback in notification', { error: photoError.message });
-            }
-          }
-        }
-      }
+      const formatted = await this.adPresenter.format(ad);
+      const withHeader = { ...formatted, text: `📢 Новое объявление!\n\n${formatted.text}` };
+      await this.telegramSender.send(telegramId, withHeader);
     } catch (error: any) {
       if (error.response?.statusCode === 403) {
         logger.warn('User blocked bot', { telegramId });
@@ -894,68 +637,6 @@ export class BotHandler {
           error: error.message
         });
       }
-    }
-  }
-
-  async handleShowMap(chatId: number, adId: string): Promise<void> {
-    try {
-      if (!this.yandexMaps) {
-        await this.bot.sendMessage(chatId, '❌ Функция карт недоступна. API ключ не настроен.');
-        return;
-      }
-
-      const ad = this.adCache.get(adId);
-      if (!ad) {
-        await this.bot.sendMessage(chatId, '❌ Объявление не найдено. Попробуйте обновить список.');
-        return;
-      }
-
-      // Формируем адрес для геокодирования
-      const addressParts = [];
-      if (ad.location) addressParts.push(ad.location);
-      if (ad.address) addressParts.push(ad.address);
-
-      const fullAddress = addressParts.join(', ');
-      if (!fullAddress) {
-        await this.bot.sendMessage(chatId, '❌ Адрес не указан в объявлении.');
-        return;
-      }
-
-      await this.bot.sendMessage(chatId, '🔍 Ищу адрес на карте...');
-
-      // Получаем URL картинки карты
-      const mapImageUrl = await this.yandexMaps.getMapImageForAddress(fullAddress);
-
-      if (!mapImageUrl) {
-        await this.bot.sendMessage(chatId, '❌ Не удалось найти адрес на карте. Попробуйте позже.');
-        return;
-      }
-
-      // Отправляем картинку карты
-      await this.bot.sendPhoto(chatId, mapImageUrl, {
-        caption: `📍 ${fullAddress}\n\n${ad.title}\n💰 ${ad.price}\n🔗 ${ad.ad_url}`,
-      });
-
-      logger.info('Map sent successfully', { adId, address: fullAddress });
-    } catch (error: any) {
-      logger.error('Failed to show map', { adId, error: error.message, stack: error.stack });
-
-      // Определяем тип ошибки
-      let errorMessage = '❌ Произошла ошибка при загрузке карты.';
-
-      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-        errorMessage = '❌ Не удалось подключиться к сервису карт. Проверьте интернет-соединение.';
-      } else if (error.response?.status === 403) {
-        errorMessage = '❌ Доступ к сервису карт ограничен. Попробуйте позже.';
-      } else if (error.response?.status === 429) {
-        errorMessage = '❌ Превышен лимит запросов к картам. Подождите немного.';
-      } else if (error.message?.includes('timeout')) {
-        errorMessage = '❌ Превышено время ожидания ответа от сервиса карт.';
-      } else if (error.message?.includes('not found') || error.message?.includes('адрес')) {
-        errorMessage = '❌ Не удалось найти указанный адрес на карте.';
-      }
-
-      await this.bot.sendMessage(chatId, errorMessage);
     }
   }
 

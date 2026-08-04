@@ -2,6 +2,7 @@ import * as cron from 'node-cron';
 import { DatabaseService } from '../database/DatabaseService';
 import { ParserFactory } from '../parsers/ParserFactory';
 import { BotHandler } from '../bot/BotHandler';
+import { NewAdSelector } from '../services/NewAdSelector';
 import { logger } from '../utils/logger';
 
 export class ParserScheduler {
@@ -128,24 +129,8 @@ export class ParserScheduler {
           telegramId: user.telegram_id 
         });
         
-        // Сортируем объявления по дате обновления (если есть) или по ID
-        // Приоритет: updated_at > published_at > id
-        const sortedAds = newAds.sort((a, b) => {
-          const dateA = a.updated_at || a.published_at || new Date(0);
-          const dateB = b.updated_at || b.published_at || new Date(0);
-          const timeA = dateA instanceof Date ? dateA.getTime() : new Date(dateA).getTime();
-          const timeB = dateB instanceof Date ? dateB.getTime() : new Date(dateB).getTime();
-          
-          // Если даты одинаковые, сортируем по ID
-          if (timeA === timeB) {
-            return b.id - a.id;
-          }
-          
-          return timeB - timeA; // От новых к старым
-        });
-        
-        // Берем первые 5 объявлений (самые свежие)
-        const adsToNotify = sortedAds.slice(0, 5);
+        // Берем 5 самых свежих объявлений (новые сверху)
+        const adsToNotify = NewAdSelector.pick(newAds, 5);
         
         for (const ad of adsToNotify) {
           try {
