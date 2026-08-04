@@ -2,14 +2,26 @@ import axios from 'axios';
 import { logger } from '../utils/logger';
 import { findMinskDistrict } from '../data/minskDistricts';
 
+interface GeocodeResult {
+  lat: number;
+  lon: number;
+  kind: string;
+  bounds?: { lowerCorner: [number, number]; upperCorner: [number, number] };
+  envelope?: string;
+}
+
 export class YandexMapsService {
   private geocoderApiKey: string;
-  private staticApiUrl = 'https://static-maps.yandex.ru/1.x/';
-  private geocoderUrl = 'https://geocode-maps.yandex.ru/1.x/';
+  private staticMapsApiKey: string;
+  private staticApiUrl = 'https://static-maps.yandex.ru/v1';
+  private geocoderUrl = 'https://geocode-maps.yandex.ru/v1/';
   private nominatimUrl = 'https://nominatim.openstreetmap.org/search';
+  private geocodeCache: Map<string, GeocodeResult> = new Map();
+  private referer = 'https://kufar.by/';
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, staticMapsApiKey?: string) {
     this.geocoderApiKey = apiKey;
+    this.staticMapsApiKey = staticMapsApiKey || apiKey;
   }
 
   /**
@@ -27,6 +39,7 @@ export class YandexMapsService {
         headers: {
           'User-Agent': 'KufarParserBot/1.0',
         },
+        timeout: 5000,
       });
 
       if (!response.data || response.data.length === 0) {
@@ -71,13 +84,13 @@ export class YandexMapsService {
   /**
    * Геокодирование адреса в координаты с информацией о типе объекта
    */
-  async geocodeAddress(address: string): Promise<{ 
-    lat: number; 
-    lon: number; 
-    kind: string;
-    bounds?: { lowerCorner: [number, number]; upperCorner: [number, number] };
-    envelope?: string;
-  } | null> {
+  async geocodeAddress(address: string): Promise<GeocodeResult | null> {
+    const cacheKey = address.trim().toLowerCase();
+    const cached = this.geocodeCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     try {
       const response = await axios.get(this.geocoderUrl, {
         params: {
@@ -85,7 +98,13 @@ export class YandexMapsService {
           geocode: address,
           format: 'json',
           results: 1,
+          lang: 'ru_RU',
         },
+        headers: {
+          'User-Agent': 'KufarParserBot/1.0',
+          'Referer': this.referer,
+        },
+        timeout: 5000,
       });
 
       const geoObject = response.data?.response?.GeoObjectCollection?.featureMember?.[0]?.GeoObject;
@@ -111,34 +130,40 @@ export class YandexMapsService {
         envelope = `${lowerCorner[0]},${lowerCorner[1]}~${upperCorner[0]},${upperCorner[1]}`;
       }
 
-      return {
+      const result: GeocodeResult = {
         lon: parseFloat(coords[0]),
         lat: parseFloat(coords[1]),
         kind,
         bounds,
         envelope,
       };
+
+      this.geocodeCache.set(cacheKey, result);
+      return result;
     } catch (error: any) {
       logger.error('Geocoding error', { address, error: error.message });
       return null;
     }
   }
 
+  private buildStaticUrl(params: Record<string, string>): string {
+    const merged = new URLSearchParams(params);
+    merged.set('apikey', this.staticMapsApiKey);
+    return `${this.staticApiUrl}?${merged.toString()}`;
+  }
+
   /**
    * Получить URL статической карты с маркером
    */
   getStaticMapUrl(lat: number, lon: number, zoom: number = 16): string {
-    // Формат: https://static-maps.yandex.ru/1.x/?ll=lon,lat&z=zoom&l=map&pt=lon,lat,pm2rdm
     // pm2rdm - красный маркер среднего размера
-    const params = new URLSearchParams({
+    return this.buildStaticUrl({
       ll: `${lon},${lat}`,
       z: zoom.toString(),
       l: 'map',
-      pt: `${lon},${lat},pm2rdm`, // Маркер
-      size: '450,300', // Размер изображения
+      pt: `${lon},${lat},pm2rdm`,
+      size: '450,300',
     });
-
-    return `${this.staticApiUrl}?${params.toString()}`;
   }
 
   /**
@@ -154,14 +179,13 @@ export class YandexMapsService {
 
     // Для точных адресов (дом, улица) - ставим метку с большим зумом
     if (kind === 'house' || kind === 'street') {
-      const params = new URLSearchParams({
+      return this.buildStaticUrl({
         ll: `${lon},${lat}`,
-        z: '11', // Более крупный зум для улиц/домов
+        z: '11',
         l: 'map',
         pt: `${lon},${lat},pm2rdm`,
         size: '600,400',
       });
-      return `${this.staticApiUrl}?${params.toString()}`;
     }
 
     // Для районов Минска - рисуем полигон
@@ -172,26 +196,21 @@ export class YandexMapsService {
 
         const polygonStyle = `c:FF0000CC,f:FF000033,w:3,${polygon}`;
 
-        const params = new URLSearchParams();
-        if (envelope) params.append('bbox', envelope);
-        params.append('l', 'map');
-        params.append('pl', polygonStyle);
-        params.append('size', '600,400');
+        const params: Record<string, string> = { l: 'map', pl: polygonStyle, size: '600,400' };
+        if (envelope) params.bbox = envelope;
 
-        return `${this.staticApiUrl}?${params.toString()}`;
+        return this.buildStaticUrl(params);
     }
 
     // Для всех остальных случаев (включая города/locality) - ставим метку с подходящим зумом
     const zoom = kind === 'locality' ? '11' : kind === 'district' ? '13' : '12';
-    const params = new URLSearchParams({
+    return this.buildStaticUrl({
       ll: `${lon},${lat}`,
       z: zoom,
       l: 'map',
       pt: `${lon},${lat},pm2rdm`,
       size: '600,400',
     });
-
-    return `${this.staticApiUrl}?${params.toString()}`;
   }
 
   /**
