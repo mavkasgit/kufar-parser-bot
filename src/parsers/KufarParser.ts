@@ -87,15 +87,6 @@ export class KufarParser extends BaseParser {
     super(axiosInstance);
   }
 
-  validateUrl(url: string): boolean {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname.includes('kufar.by') && (urlObj.pathname.startsWith('/l/') || urlObj.pathname.startsWith('/re/'));
-    } catch {
-      return false;
-    }
-  }
-
   async parseUrl(url: string): Promise<Ad[]> {
     try {
       const urlObj = new URL(url);

@@ -251,12 +251,7 @@ export class BotHandler {
         }
       } catch (error: any) {
         logger.error('Failed to test parse link', { userId, url, error: error.message });
-        await this.bot.sendMessage(
-          chatId,
-          '❌ Не удалось проверить ссылку.\n\n' +
-          `Ошибка: ${error.message}\n\n` +
-          'Попробуйте другую ссылку или повторите позже.'
-        );
+        await this.bot.sendMessage(chatId, mapError(error));
         return;
       }
 
@@ -286,7 +281,7 @@ export class BotHandler {
       );
 
       // Show last 5 ads as preview (from oldest to newest)
-      const previewAds = testAds.slice(-5).reverse();
+      const previewAds = NewAdSelector.pick(testAds, 5).reverse();
       await this.bot.sendMessage(chatId, `📋 Последние ${previewAds.length} объявлений:`);
 
       const formattedAds = await Promise.all(previewAds.map(ad => this.adPresenter.format(ad)));

@@ -6,18 +6,6 @@ import { logger } from '../utils/logger';
 export class OnlinerParser extends BaseParser {
   platform = 'onliner' as const;
 
-  validateUrl(url: string): boolean {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname.includes('onliner.by') && 
-             (urlObj.hostname.includes('baraholka') || 
-              urlObj.hostname.includes('ab') || 
-              urlObj.hostname.includes('r.onliner'));
-    } catch {
-      return false;
-    }
-  }
-
   async parseUrl(url: string): Promise<Ad[]> {
     try {
       const urlObj = new URL(url);

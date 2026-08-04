@@ -63,5 +63,4 @@ export abstract class BaseParser implements IParser {
   }
 
   abstract parseUrl(url: string): Promise<Ad[]>;
-  abstract validateUrl(url: string): boolean;
 }

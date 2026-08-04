@@ -11,15 +11,6 @@ export class AvParser extends BaseParser {
     super(axiosInstance);
   }
 
-  validateUrl(url: string): boolean {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname.includes('av.by');
-    } catch {
-      return false;
-    }
-  }
-
   async parseUrl(url: string): Promise<Ad[]> {
     logger.info('AV.by parsing started', { url });
     try {

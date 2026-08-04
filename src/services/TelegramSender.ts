@@ -18,7 +18,15 @@ export class TelegramSender {
           await this.bot.sendPhoto(chatId, ad.media[0]);
         } else {
           const inputMedia: TelegramBot.InputMediaPhoto[] = ad.media.map(url => ({ type: 'photo', media: url }));
-          await this.bot.sendMediaGroup(chatId, inputMedia);
+          try {
+            await this.bot.sendMediaGroup(chatId, inputMedia);
+          } catch (error: any) {
+            logger.warn('Failed to send media group, falling back to single photo', {
+              error: error.message,
+              count: ad.media.length,
+            });
+            await this.bot.sendPhoto(chatId, ad.media[0]);
+          }
         }
       } catch (error: any) {
         logger.warn('Failed to send media', { error: error.message, count: ad.media.length });
@@ -41,9 +49,11 @@ export class TelegramSender {
   }
 
   async sendBatch(chatId: number, ads: FormattedAd[]): Promise<void> {
-    for (const ad of ads) {
-      await this.send(chatId, ad);
-      await this.sleep(1000);
+    for (let i = 0; i < ads.length; i++) {
+      await this.send(chatId, ads[i]);
+      if (i < ads.length - 1) {
+        await this.sleep(3000);
+      }
     }
   }
 
